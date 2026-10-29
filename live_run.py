@@ -43,7 +43,7 @@ from vita49_audio import VitaAudioReceiver, decode_audio_float32_stereo_be
 # (gui_run.py imports this) so "which build is this" is never a guess -- a
 # stale .exe looks identical to a current one until it is rebuilt.
 # Format: YYYY-MM-DD.N
-APP_VERSION = "2026-10-27.1-deepcw"
+APP_VERSION = "2026-10-29.1-deepcw"
 
 
 class DetectorError(Exception):
@@ -53,80 +53,12 @@ class DetectorError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Audio recorder ("Save last 2 min")
-# ---------------------------------------------------------------------------
-
-class AudioRecorder:
-    """Keeps the most recent `seconds` of the audio the decoder is receiving so
-    the "Save last 2 min" button can write it to a WAV file at any moment --
-    including a weak signal that was fading in a minute ago.  Reuses the audio
-    the decoder already has, so no second connection (and no port conflict).
-
-    Flex DAX audio is complex (I/Q): saved as a 2-channel 32-bit float WAV
-    (left = I, right = Q).  Sound-card audio is real: saved as a mono WAV."""
-
-    def __init__(self, sample_rate=24000.0, seconds=120.0):
-        self.sample_rate = float(sample_rate)
-        self.max_n = int(seconds * self.sample_rate)
-        self._lock = threading.Lock()
-        self._chunks = []
-        self._n = 0
-        self._complex = True
-
-    def reset(self, sample_rate, is_complex):
-        with self._lock:
-            self.sample_rate = float(sample_rate)
-            self.max_n = int(120.0 * self.sample_rate)
-            self._complex = bool(is_complex)
-            self._chunks = []
-            self._n = 0
-
-    def clear(self):
-        with self._lock:
-            self._chunks = []
-            self._n = 0
-
-    def push(self, chunk):
-        c = np.asarray(chunk)
-        c = c.astype(np.complex64 if self._complex else np.float32, copy=True)
-        with self._lock:
-            self._chunks.append(c)
-            self._n += len(c)
-            while self._n - len(self._chunks[0]) >= self.max_n and len(self._chunks) > 1:
-                self._n -= len(self._chunks.pop(0))
-
-    def seconds_available(self):
-        with self._lock:
-            return min(self._n, self.max_n) / self.sample_rate
-
-    def save(self, path):
-        """Write what is buffered to `path` (a .wav).  Returns seconds saved,
-        or 0.0 if nothing has been received yet."""
-        from scipy.io import wavfile
-        with self._lock:
-            if not self._chunks:
-                return 0.0
-            z = np.concatenate(self._chunks)[-self.max_n:]
-            is_complex = self._complex
-        if is_complex:
-            data = np.stack([z.real, z.imag], axis=1).astype(np.float32)
-        else:
-            data = z.astype(np.float32)
-        wavfile.write(path, int(round(self.sample_rate)), data)
-        return len(z) / self.sample_rate
-
-
-RECORDER = AudioRecorder()
-
-
-# ---------------------------------------------------------------------------
 # DeepCW plumbing shared by both sources
 # ---------------------------------------------------------------------------
 
 def _start_deepcw(sample_rate, log, is_complex):
     """Start the DeepCW streamer or raise DetectorError with a plain-English
     reason (missing onnxruntime, missing model folder...)."""
-    RECORDER.reset(sample_rate, is_complex)
     try:
         import deepcw_backend
         streamer = deepcw_backend.DeepCWStreamer(sample_rate)
@@ -144,7 +76,6 @@ def _feed_deepcw(deepcw, chunk, log):
     if deepcw is None:
         return
     try:
-        RECORDER.push(chunk)
         text = deepcw.push(chunk)
         if text:
             log(f"DEEPCW: {text}")

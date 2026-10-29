@@ -28,6 +28,7 @@ import re
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -314,6 +315,17 @@ class DetectorApp:
             font=("TkDefaultFont", 9, "bold"), bg=self._NEUTRAL_BG,
             disabledforeground=self._IDLE_TEXT)
         self.stop_button.pack(side="left")
+        # "Clear" -- manually blanks both text panes for a clean start,
+        # without needing to Stop/Start the whole run (Ken, 2026-09-16).
+        # Yellow to match the log window's own "hit" highlight color
+        # (self.log_text's "hit" tag, #ffeb3b) rather than a new one-off
+        # color. Plain tk.Button, same reasoning as Start/Stop above.
+        self.clear_button = tk.Button(
+            btn_frame, text="Clear", command=self._on_clear, width=7,
+            font=("TkDefaultFont", 9, "bold"), bg="#ffeb3b", fg="black",
+            activebackground="#ffeb3b", activeforeground="black")
+        self.clear_button.pack(side="left", padx=(6, 0))
+
         self.status_var = tk.StringVar(value="IDLE - press Start")
         self.status_label = tk.Label(btn_frame, textvariable=self.status_var,
                                       font=("TkDefaultFont", 10, "bold"), fg=self._IDLE_STATUS)
@@ -332,27 +344,6 @@ class DetectorApp:
                                    font=("TkDefaultFont", 10, "bold"), fg="black")
         self.wpm_label.pack(side="left", padx=(0, 8))
 
-        # "Clear" -- manually blanks both text panes for a clean start,
-        # without needing to Stop/Start the whole run (Ken, 2026-09-16).
-        # Yellow to match the log window's own "hit" highlight color
-        # (self.log_text's "hit" tag, #ffeb3b) rather than a new one-off
-        # color. Plain tk.Button, same reasoning as Start/Stop above.
-        self.clear_button = tk.Button(
-            btn_frame, text="Clear", command=self._on_clear, width=7,
-            font=("TkDefaultFont", 9, "bold"), bg="#ffeb3b", fg="black",
-            activebackground="#ffeb3b", activeforeground="black")
-        self.clear_button.pack(side="left", padx=(0, 6))
-
-        # "Save last 2 min" -- writes the audio the decoder has been receiving
-        # to a WAV file (plus a text file with the DeepCW copy) in the
-        # "captures" folder next to the program, so a weak or fading signal
-        # can be saved the moment it is heard, with no second program.
-        self.save_audio_button = tk.Button(
-            btn_frame, text="Save last 2 min", command=self._on_save_audio, width=12,
-            font=("TkDefaultFont", 9, "bold"), bg="#4fc3f7", fg="black",
-            activebackground="#4fc3f7", activeforeground="black")
-        self.save_audio_button.pack(side="left")
-
         # -- Input level bar ---------------------------------------------------
         # Peak of the incoming audio, about 5 times a second ("LEVEL: " lines).
         # Answers "is audio arriving, and is it far too quiet or clipping" at a
@@ -361,13 +352,15 @@ class DetectorApp:
         level_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 2))
         row += 1
         ttk.Label(level_frame, text="Input level:").pack(side="left", padx=(0, 6))
-        self._LEVEL_W, self._LEVEL_H = 260, 14
+        self._LEVEL_W, self._LEVEL_H = 260, 16
+        self._overload_until = 0.0
         self.level_canvas = tk.Canvas(level_frame, width=self._LEVEL_W, height=self._LEVEL_H,
                                        bg="black", highlightthickness=1, highlightbackground="#555555")
         self.level_canvas.pack(side="left")
         self.level_hint_var = tk.StringVar(value="")
-        ttk.Label(level_frame, textvariable=self.level_hint_var, foreground="#555555",
-                  font=("TkDefaultFont", 8)).pack(side="left", padx=8)
+        self.level_hint_label = ttk.Label(level_frame, textvariable=self.level_hint_var,
+                                          foreground="#555555", font=("TkDefaultFont", 8, "bold"))
+        self.level_hint_label.pack(side="left", padx=8)
 
         # -- Audio note meter --------------------------------------------------
         # DeepCW mode -- a live "where's my audio note relative to
@@ -465,7 +458,8 @@ class DetectorApp:
         # of the window (how problems actually got reported/debugged
         # this project) crops or covers the title bar more often than
         # not, but this line is always in frame.
-        ttk.Label(main, text=f"by W9IE with Claude  --  v{APP_VERSION}", foreground="gray").grid(
+        ttk.Label(main, text=f"by W9IE with Claude  --  v{APP_VERSION}", foreground="#555555",
+                  font=("TkDefaultFont", 9, "bold")).grid(
             row=row, column=0, columnspan=2, sticky="e", padx=6, pady=(4, 0))
 
     def _build_advanced_widgets(self):
@@ -706,23 +700,63 @@ class DetectorApp:
             "device": self.device_var.get(),
         }
 
+    # Input-level bar scale: -50 dB (empty) .. 0 dB (full scale).  The GOOD zone is
+    # where the radio's audio is comfortably above the noise floor yet nowhere near
+    # clipping; DeepCW reads the tone's contrast against the noise, so a louder signal
+    # decodes no better, but clipping distorts the tone and does hurt.
+    _LEVEL_DB_MIN = -50.0
+    _GOOD_LOW_DB = -25.0
+    _GOOD_HIGH_DB = -6.0
+    _OVERLOAD_DB = -1.0
+    _OVERLOAD_HOLD_SEC = 1.5
+
+    def _level_x(self, db):
+        frac = (db - self._LEVEL_DB_MIN) / (0.0 - self._LEVEL_DB_MIN)
+        return min(1.0, max(0.0, frac)) * self._LEVEL_W
+
     def _update_level(self, peak):
-        """Input-level bar: -50 dB (empty) to 0 dB (full), green / yellow / red."""
+        """Input-level bar.  Colours: blue-grey = low, green = good (the dark green
+        strip behind the bar marks the good zone, -25 to -6 dB), yellow = getting loud,
+        red = overload.  An overload keeps a red block at the right end and the warning
+        text for about a second and a half, so a quick spike is not missed."""
         c = self.level_canvas
         c.delete("all")
+        h = self._LEVEL_H
+        gx0, gx1 = self._level_x(self._GOOD_LOW_DB), self._level_x(self._GOOD_HIGH_DB)
+        c.create_rectangle(gx0, 0, gx1, h, fill="#12361a", outline="")      # the good zone
+        for x in (gx0, gx1):
+            c.create_line(x, 0, x, h, fill="#7cb342")
+        now = time.monotonic()
         if peak <= 0:
-            self.level_hint_var.set("")
+            self._overload_until = 0.0
+            self.level_hint_var.set("green zone = good level")
+            self.level_hint_label.config(foreground="#555555")
             return
         db = 20.0 * math.log10(max(peak, 1e-6))
-        frac = min(1.0, max(0.0, (db + 50.0) / 50.0))
-        color = "#2e7d32" if db < -6 else ("#f9a825" if db < -1 else "#c62828")
-        c.create_rectangle(0, 0, frac * self._LEVEL_W, self._LEVEL_H, fill=color, outline="")
-        if db >= -1:
-            self.level_hint_var.set("too loud -- turn the radio's audio output down")
+        if db >= self._OVERLOAD_DB:
+            self._overload_until = now + self._OVERLOAD_HOLD_SEC
+        if db >= self._OVERLOAD_DB:
+            color = "#c62828"
+        elif db >= self._GOOD_HIGH_DB:
+            color = "#f9a825"
+        elif db >= self._GOOD_LOW_DB:
+            color = "#2e7d32"
+        else:
+            color = "#607d8b"
+        c.create_rectangle(0, 3, self._level_x(db), h - 3, fill=color, outline="")
+        overloaded = now < self._overload_until
+        self.level_hint_label.config(foreground="#c62828" if overloaded else "#555555")
+        if overloaded:
+            c.create_rectangle(self._LEVEL_W - 14, 0, self._LEVEL_W, h, fill="#c62828", outline="")
+            self.level_hint_var.set("OVERLOAD -- turn the radio's audio output down")
+        elif db >= self._GOOD_HIGH_DB:
+            self.level_hint_var.set("getting loud")
+        elif db >= self._GOOD_LOW_DB:
+            self.level_hint_var.set("good level")
         elif db < -40:
             self.level_hint_var.set("very quiet")
         else:
-            self.level_hint_var.set("")
+            self.level_hint_var.set("a little low")
 
     def _update_tone_meter(self, hz, low, high, bins):
         """Horizontal spectrum strip (low Hz at the left, high Hz at the
@@ -847,41 +881,6 @@ class DetectorApp:
 
     def _on_clear(self):
         self._clear_display()
-
-    def _on_save_audio(self):
-        """Save the last ~2 minutes of received audio (WAV) and the DeepCW text
-        so far (TXT, with a blank "heard by ear" section to fill in) into the
-        'captures' folder next to the program."""
-        import datetime
-        import live_run
-        try:
-            folder = os.path.join(_APP_DIR, "captures")
-            os.makedirs(folder, exist_ok=True)
-            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            wav_path = os.path.join(folder, f"capture_{stamp}.wav")
-            seconds = live_run.RECORDER.save(wav_path)
-            if seconds <= 0:
-                self._log("Nothing to save yet -- press Start and let the decoder run first.")
-                return
-            decoded = self.deepcw_text.get("1.0", "end").strip()
-            tone = self.tone_var.get() or "unknown"
-            with open(os.path.join(folder, f"capture_{stamp}.txt"), "w", encoding="utf-8") as f:
-                f.write(f"Capture saved {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
-                if self.source_var.get() == "soundcard":
-                    f.write(f"Audio: capture_{stamp}.wav  ({seconds:.0f} s, mono float32)\n")
-                    f.write(f"Audio note: {tone}   Source: sound card ({self.device_var.get()})\n\n")
-                else:
-                    f.write(f"Audio: capture_{stamp}.wav  ({seconds:.0f} s, 24000 Hz, stereo I/Q float32)\n")
-                    f.write(f"Audio note: {tone}   Radio IP: {self.host_var.get()}   "
-                            f"Slice: {self.slice_var.get()}\n\n")
-                f.write("WHAT I HEARD BY EAR (type here, use ? for gaps):\n\n\n")
-                f.write("DEEPCW COPY SHOWN ON SCREEN (everything since Start/Clear; the saved "
-                        "audio is only the last part of it):\n")
-                f.write(decoded + "\n")
-            self._log(f"Saved last {seconds:.0f} s of audio: captures\\capture_{stamp}.wav "
-                      f"(and a .txt note beside it). Open the .txt and type what you heard.")
-        except Exception as e:  # noqa: BLE001 -- never crash the window over a save
-            self._log(f"Could not save the audio: {e}")
 
     def _on_start(self):
         if self.running:

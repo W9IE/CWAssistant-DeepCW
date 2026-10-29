@@ -16,9 +16,9 @@ Written by W9IE (with help from Claude).
 - A big window of decoded text. The dim text at the end is the newest few words, still being
   firmed up. A stand-alone "BT" (the pause sign) is shown as "=".
 - The sending speed (WPM) and the audio pitch ("Note") DeepCW is following.
-- An input-level bar (is audio arriving, and is it too loud) and a small spectrum meter.
-- Start / Stop / Clear buttons, and a "Save last 2 min" button that saves the last two minutes
-  of received audio plus the decoded text, handy for sharing a problem signal.
+- An input-level bar with a dark green "good level" zone: the bar is green inside it, yellow
+  when getting loud, and red (with a warning that stays up for a moment) on overload.
+- Start / Stop / Clear buttons.
 
 DeepCW finds the CW tone itself (roughly 400-1200 Hz), so you do not enter a pitch.
 
@@ -50,8 +50,8 @@ other FlexRadio software. The "Show advanced settings" button shows these option
    usually its USB audio device, often listed as something like "USB Audio CODEC").
 2. In the program choose **Sound card**, pick the device in the list (press **Refresh list** if
    it is missing), and press **Start**.
-3. Watch the **Input level** bar. It should move with the signal but not sit at the far right
-   (red means too loud and the audio may be distorted -- turn the radio's audio output down).
+3. Watch the **Input level** bar. Aim for the bar to sit inside the dark green zone on signals.
+   Red means too loud and the audio may be distorted -- turn the radio's audio output down.
 
 If nothing appears, check Windows **Settings > Privacy > Microphone** and make sure desktop
 apps are allowed to use the microphone.
