@@ -43,7 +43,7 @@ from vita49_audio import VitaAudioReceiver, decode_audio_float32_stereo_be
 # (gui_run.py imports this) so "which build is this" is never a guess -- a
 # stale .exe looks identical to a current one until it is rebuilt.
 # Format: YYYY-MM-DD.N
-APP_VERSION = "2026-10-29.1-deepcw"
+APP_VERSION = "2026-10-29.3-deepcw"
 
 
 class DetectorError(Exception):

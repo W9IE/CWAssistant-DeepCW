@@ -18,7 +18,7 @@ Written by W9IE (with help from Claude).
 - The sending speed (WPM) and the audio pitch ("Note") DeepCW is following.
 - An input-level bar with a dark green "good level" zone: the bar is green inside it, yellow
   when getting loud, and red (with a warning that stays up for a moment) on overload.
-- Start / Stop / Clear buttons.
+- Start / Stop / Clear buttons, and a blue **Help** button that opens a Quick start window.
 
 DeepCW finds the CW tone itself (roughly 400-1200 Hz), so you do not enter a pitch.
 

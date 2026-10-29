@@ -29,6 +29,7 @@ import queue
 import sys
 import threading
 import time
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -147,6 +148,10 @@ class DetectorApp:
         self._DEFAULT_WINDOW_HEIGHT = 720
 
         self.settings = load_settings()
+        # The window always STARTS on Slice A (Ken, 2026-10-29), even if Slice B was
+        # used last time; the other settings (IP address, ports, source ...) are still
+        # remembered.  To make it remember the last slice again, delete this line.
+        self.settings["slice"] = 0
         self.log_queue = queue.Queue()
         self.worker_thread = None
         self.stop_event = threading.Event()
@@ -325,6 +330,14 @@ class DetectorApp:
             font=("TkDefaultFont", 9, "bold"), bg="#ffeb3b", fg="black",
             activebackground="#ffeb3b", activeforeground="black")
         self.clear_button.pack(side="left", padx=(6, 0))
+        # "Help" -- blue, right of Clear.  Opens a Quick-start window (text lives in this
+        # file, so it works offline and always matches the version).  Never opens by itself.
+        self.help_button = tk.Button(
+            btn_frame, text="Help", command=self._on_help, width=7,
+            font=("TkDefaultFont", 9, "bold"), bg=self._INPUT_BG, fg="white",
+            activebackground="#0d47a1", activeforeground="white")
+        self.help_button.pack(side="left", padx=(6, 0))
+        self._help_window = None
 
         self.status_var = tk.StringVar(value="IDLE - press Start")
         self.status_label = tk.Label(btn_frame, textvariable=self.status_var,
@@ -588,7 +601,9 @@ class DetectorApp:
         try:
             n = int(n)
         except (TypeError, ValueError):
-            n = 1
+            n = 0
+        if not 0 <= n <= 7:
+            n = 0
         return f"{chr(ord('A') + n)} ({n})"
 
     @staticmethod
@@ -597,7 +612,7 @@ class DetectorApp:
         try:
             return int(label.split("(")[1].rstrip(")"))
         except (IndexError, ValueError):
-            return 1
+            return 0
 
     # -- logging ----------------------------------------------------------
 
@@ -878,6 +893,109 @@ class DetectorApp:
         self._clear_tone_meter()
         self.wpm_var.set("")
         self._update_level(0.0)
+
+    # -- Help window ---------------------------------------------------------
+
+    PROJECT_URL = "https://github.com/W9IE/CWAssistant-DeepCW"
+
+    # (style, text) pieces: "h" = heading, "p" = paragraph, "m" = monospace / example
+    _HELP_TEXT = [
+        ("h", "What this program does"),
+        ("p", "It copies Morse code (CW) from your radio and shows the text in the big amber "
+              "window, using the DeepCW neural-network decoder. It only listens: it never "
+              "transmits, never touches PTT and never changes your radio's frequency. DeepCW "
+              "finds the CW tone by itself, so you do not enter a pitch."),
+        ("h", "Quick start: FlexRadio"),
+        ("p", "1. Start SmartSDR and open the slice you want to copy (Slice A or B).\n"
+              "2. Audio source: FlexRadio (DAX Audio).\n"
+              "3. Type the radio's IP address (see SmartSDR's radio list, or your router's device list) and pick the slice.\n"
+              "4. Press Start. The status box under the buttons says what the radio reports, "
+              "for example 'confirmed by the radio: Slice B is on DAX channel 2'.\n"
+              "5. If Windows Firewall asks, allow the program on your private network.\n\n"
+              "To change the slice, press Stop, change it, and press Start again. The choice is "
+              "only read when you press Start. The program is allowed to give the slice a DAX "
+              "channel that no other slice is using; it never takes one away from another slice."),
+        ("h", "Quick start: any other radio (ICOM, Yaesu, Kenwood, Elecraft ...)"),
+        ("p", "1. Get the radio's receive audio into a Windows recording device: the radio's USB "
+              "audio, a sound-card interface, or a virtual audio cable.\n"
+              "2. Audio source: Sound card, then pick the device in the list "
+              "(Refresh list if it is missing).\n"
+              "3. Press Start and watch the Input level bar.\n\n"
+              "If nothing happens, check Windows Settings > Privacy > Microphone and make sure "
+              "desktop apps may use the microphone. Sound-card mode has so far been tested with "
+              "simulated audio only, so reports from real radios are welcome."),
+        ("h", "Reading the window"),
+        ("p", "Decoded text: the big amber window. The dim text at the end is the newest few words, "
+              "still being firmed up; it settles a moment later. A stand-alone BT (the pause sign) "
+              "is shown as '='.\n\n"
+              "Note: the audio pitch DeepCW is following.   WPM: the estimated sending speed.\n\n"
+              "Input level bar: the dark green strip is the good zone. Green = good, "
+              "yellow = getting loud, blue-grey = low, red = overload. An overload warning stays on "
+              "for about a second and a half. If you see red, turn the radio's audio output down; "
+              "a clipped signal decodes worse. A louder signal does not decode better.\n\n"
+              "Audio note spectrum: where the audio energy is. The red line is the CW tone "
+              "DeepCW is following.\n\n"
+              "Clear empties the text windows (it does not stop the decoder). Stop ends the run."),
+        ("h", "If something is wrong"),
+        ("p", "No text: check the level bar moves, that the radio is tuned to a CW signal inside "
+              "your receive filter, and read the status box for messages.\n"
+              "'DeepCW model not found': the exe was built without the model packed inside; "
+              "download the exe again from the project page.\n"
+              "Windows says 'Windows protected your PC': the program is not code-signed. Click "
+              "More info, then Run anyway.\n"
+              "Very weak, fading or badly sent signals can still produce errors."),
+        ("h", "About"),
+        ("p", "Free software under the GNU Affero General Public License v3. Written by W9IE "
+              "with Claude. Not affiliated with or endorsed by FlexRadio, ICOM, Yaesu or Kenwood. "
+              "Source code, updates and bug reports are on the project page."),
+    ]
+
+    def _on_help(self):
+        """Show (or raise) the Quick-start window.  Never opens by itself."""
+        win = self._help_window
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win.deiconify()
+                    win.lift()
+                    win.focus_set()
+                    return
+            except tk.TclError:
+                pass
+        win = tk.Toplevel(self.root)
+        self._help_window = win
+        win.title(f"CWAssistant - DeepCW Edition: Quick start  (v{APP_VERSION})")
+        win.geometry("680x560")
+        win.minsize(480, 320)
+        win.transient(self.root)
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(0, weight=1)
+        text = tk.Text(win, wrap="word", padx=14, pady=10, bg="white", fg="#222222",
+                       font=("TkDefaultFont", 10), spacing3=4, relief="flat", cursor="arrow")
+        text.grid(row=0, column=0, sticky="nsew")
+        bar = ttk.Scrollbar(win, command=text.yview)
+        bar.grid(row=0, column=1, sticky="ns")
+        text["yscrollcommand"] = bar.set
+        text.tag_configure("h", font=("TkDefaultFont", 12, "bold"), foreground="#1565c0",
+                           spacing1=12, spacing3=4)
+        text.tag_configure("p", spacing3=6)
+        text.insert("end", f"Quick start  --  version {APP_VERSION}\n", ("h",))
+        for style, body in self._HELP_TEXT:
+            text.insert("end", body + "\n", (style,))
+        text["state"] = "disabled"
+        buttons = ttk.Frame(win, padding=8)
+        buttons.grid(row=1, column=0, columnspan=2, sticky="ew")
+        tk.Button(buttons, text="Open project page on GitHub", command=self._open_project_page,
+                  bg=self._INPUT_BG, fg="white", activebackground="#0d47a1",
+                  activeforeground="white", font=("TkDefaultFont", 9, "bold")).pack(side="left")
+        tk.Button(buttons, text="Close", command=win.destroy, width=9,
+                  font=("TkDefaultFont", 9, "bold")).pack(side="right")
+
+    def _open_project_page(self):
+        try:
+            webbrowser.open(self.PROJECT_URL)
+        except Exception as e:  # noqa: BLE001 -- never crash the window over a link
+            self._log(f"Could not open the browser: {e}  ({self.PROJECT_URL})")
 
     def _on_clear(self):
         self._clear_display()
