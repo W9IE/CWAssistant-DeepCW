@@ -3,7 +3,7 @@
 A Windows program that copies Morse code (CW) from your radio and shows the text on screen,
 using the open-source **DeepCW** neural-network decoder. It works with:
 
-- **FlexRadio** (6000 / 8000 and Aurora series) -- it listens to one slice's DAX audio over your network.
+- **FlexRadio** (6000, 8000 and Aurora series) -- it listens to one slice's DAX audio over your network.
 - **Any other transceiver** (ICOM, Yaesu, Kenwood, Elecraft ...) -- it listens to a Windows
   recording device: the radio's USB audio, a sound-card interface, or a virtual audio cable.
 
