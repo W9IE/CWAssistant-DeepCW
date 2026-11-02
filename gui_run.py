@@ -67,6 +67,7 @@ DEFAULTS = {
     "udp_port": 41991,
     "stream_id": "",
     "device": "",              # the sound-card input's name as listed
+    "text_size": 13,           # letter size (points) in the decoded-text window
 }
 
 
@@ -120,6 +121,8 @@ class DetectorApp:
     _START_ACTIVE_BG = "#2e7d32"   # green -- running
     _STOP_READY_BG = "#c62828"     # red -- click to stop
     _STOP_ACTIVE_BG = "#8e0000"    # darker red -- stop in progress
+    _SIZE_BG = "#795548"           # brown -- the "Text size" button
+    _TEXT_SIZES = [("Small", 11), ("Normal", 13), ("Large", 16), ("Extra large", 20), ("Huge", 26)]
     _IDLE_TEXT = "#555555"         # dark gray text on a disabled light-gray button (readable)
     _IDLE_STATUS = "#e65100"       # orange -- "idle, waiting for you to press Start"
 
@@ -203,7 +206,8 @@ class DetectorApp:
         # box" past its bare right edge rather than sitting flush against it.
         margin = 10 + 10 + 6 + 6
         # Measure both rows (only one is shown at a time) and take the wider.
-        width = max(self.flex_row.winfo_reqwidth(), self.sound_row.winfo_reqwidth()) + margin
+        width = max(self.flex_row.winfo_reqwidth(), self.sound_row.winfo_reqwidth(),
+                    self.btn_frame.winfo_reqwidth()) + margin
         # Defensive floor: never hand Tk a geometry string that could be
         # zero or negative (see the real crash above) even if some future
         # change to this layout throws the above math off.
@@ -300,6 +304,7 @@ class DetectorApp:
 
         # -- Start/Stop + status ---------------------------------------------
         btn_frame = ttk.Frame(main)
+        self.btn_frame = btn_frame
         btn_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 2))
         row += 1
         # Plain tk.Button (not ttk) so the Start/Stop colors below actually
@@ -338,16 +343,29 @@ class DetectorApp:
             activebackground="#0d47a1", activeforeground="white")
         self.help_button.pack(side="left", padx=(6, 0))
         self._help_window = None
+        # "Text size" -- brown, right of Help.  A pop-up list of letter sizes for the big
+        # decoded-text window; the choice is remembered between runs.
+        self.text_size_var = tk.IntVar(value=self._valid_text_size(self.settings["text_size"]))
+        self.size_button = tk.Menubutton(
+            btn_frame, text="Text size", width=9, relief="raised", indicatoron=False,
+            font=("TkDefaultFont", 9, "bold"), bg=self._SIZE_BG, fg="white",
+            activebackground="#4e342e", activeforeground="white")
+        size_menu = tk.Menu(self.size_button, tearoff=False)
+        for label, pts in self._TEXT_SIZES:
+            size_menu.add_radiobutton(label=f"{label}  ({pts} pt)", value=pts,
+                                      variable=self.text_size_var, command=self._on_text_size)
+        self.size_button["menu"] = size_menu
+        self.size_button.pack(side="left", padx=(6, 0))
 
         self.status_var = tk.StringVar(value="IDLE - press Start")
-        self.status_label = tk.Label(btn_frame, textvariable=self.status_var,
+        self.status_label = tk.Label(btn_frame, textvariable=self.status_var, width=20, anchor="w",
                                       font=("TkDefaultFont", 10, "bold"), fg=self._IDLE_STATUS)
-        self.status_label.pack(side="left", padx=12)
+        self.status_label.pack(side="left", padx=(10, 4))
         # DeepCW decode mode only -- the audio note (pitch) DeepCW found, e.g.
         # "Note: 650 Hz" (see the "TONE: " log lines in live_run.py).  Blank
         # whenever no tone is found.
         self.tone_var = tk.StringVar(value="")
-        self.tone_label = tk.Label(btn_frame, textvariable=self.tone_var,
+        self.tone_label = tk.Label(btn_frame, textvariable=self.tone_var, width=13, anchor="w",
                                     font=("TkDefaultFont", 10, "bold"), fg="black")
         self.tone_label.pack(side="left", padx=(0, 8))
         # Sending speed estimated from DeepCW's own time-stamped characters
@@ -456,7 +474,7 @@ class DetectorApp:
             row=0, column=0, columnspan=2, sticky="w")
         self.deepcw_text = tk.Text(deepcw_frame, height=10, state="disabled", wrap="word",
                                     bg="#1f1608", fg="#ffcc80", insertbackground="#ffcc80",
-                                    font=("Consolas", 13))
+                                    font=("Consolas", self._valid_text_size(self.settings["text_size"])))
         self.deepcw_text.tag_configure("tentative", foreground="#8d6e63")
         self._deepcw_tentative = ""
         self._deepcw_tail = ""
@@ -713,6 +731,7 @@ class DetectorApp:
             "udp_port": self.adv_vars["udp_port"].get(),
             "stream_id": self.adv_vars["stream_id"].get(),
             "device": self.device_var.get(),
+            "text_size": self.text_size_var.get(),
         }
 
     # Input-level bar scale: -50 dB (empty) .. 0 dB (full scale).  The GOOD zone is
@@ -893,6 +912,23 @@ class DetectorApp:
         self._clear_tone_meter()
         self.wpm_var.set("")
         self._update_level(0.0)
+
+    # -- Text size -----------------------------------------------------------
+
+    def _valid_text_size(self, value):
+        """A saved size, or the default (13) if it is missing or not one of the choices."""
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            return 13
+        return v if v in [pts for _label, pts in self._TEXT_SIZES] else 13
+
+    def _on_text_size(self):
+        """Apply the chosen letter size to the decoded-text window right away (the
+        dim 'still being firmed up' words use the same font) and remember it."""
+        self.deepcw_text.configure(font=("Consolas", self.text_size_var.get()))
+        self.deepcw_text.see("end")
+        save_settings(self._current_settings_dict())
 
     # -- Help window ---------------------------------------------------------
 
